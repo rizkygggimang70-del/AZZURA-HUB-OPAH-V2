@@ -1,0 +1,1652 @@
+-- [[ AZZURA HUB by Azhari | MALAM SAMA OPAH ]] --
+-- v5: ESP / INFO / MISC / AUTO
+--     + pengaman Opah, cache scan (anti lag), load ulang setelah rejoin,
+--       verifikasi kunci, noclip, fullbright, anti-AFK
+
+-- Isi link RAW script ini (GitHub / Pastebin) supaya otomatis jalan lagi setelah REJOIN / HOP.
+-- Kosongkan kalau nggak dipakai.
+local RELOAD_URL = ""
+
+local Players = game:GetService("Players")
+local Workspace = game:GetService("Workspace")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+local Lighting = game:GetService("Lighting")
+local player = Players.LocalPlayer
+
+local conns, cleanups = {}, {}
+local function track(c) table.insert(conns, c) return c end
+
+-- Bungkus modul supaya error satu modul tidak mematikan semuanya
+local function safe(name, fn)
+    local ok, err = pcall(fn)
+    if not ok then warn("AZZURA [" .. name .. "] ERROR: " .. tostring(err)) end
+    return ok
+end
+
+-- Hapus GUI lama kalau script dijalankan lebih dari sekali
+local function killOld(container)
+    if container then
+        local old = container:FindFirstChild("AZZURA_HUB")
+        if old then old:Destroy() end
+    end
+end
+pcall(function() killOld(player:FindFirstChild("PlayerGui")) end)
+pcall(function() killOld(game:GetService("CoreGui")) end)
+pcall(function() if gethui then killOld(gethui()) end end)
+
+-- GUI utama
+local gui = Instance.new("ScreenGui")
+gui.Name = "AZZURA_HUB"
+gui.ResetOnSpawn = false
+
+local parentOk = pcall(function()
+    if gethui then
+        gui.Parent = gethui()
+    else
+        gui.Parent = game:GetService("CoreGui")
+    end
+end)
+if not parentOk or not gui.Parent then
+    gui.Parent = player:WaitForChild("PlayerGui")
+end
+
+-- ===== helper tampilan =====
+local C_BG = Color3.fromRGB(18, 20, 30)
+local C_BAR = Color3.fromRGB(28, 31, 45)
+local C_BTN = Color3.fromRGB(40, 45, 62)
+local C_ON = Color3.fromRGB(25, 120, 85)
+local C_RED = Color3.fromRGB(180, 40, 40)
+local GOLD = Color3.fromRGB(255, 210, 80)
+local GRAY = Color3.fromRGB(150, 150, 165)
+
+local function corner(o, r)
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, r or 8)
+    c.Parent = o
+    return c
+end
+
+local function mkLabel(parent, text, pos, size, ts, color, align)
+    local l = Instance.new("TextLabel")
+    l.Position = pos
+    l.Size = size
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = color or Color3.new(1, 1, 1)
+    l.Font = Enum.Font.GothamBold
+    l.TextSize = ts or 12
+    l.TextXAlignment = align or Enum.TextXAlignment.Left
+    l.Parent = parent
+    return l
+end
+
+local function mkBtn(parent, text, pos, size, ts)
+    local b = Instance.new("TextButton")
+    b.Position = pos
+    b.Size = size
+    b.BackgroundColor3 = C_BTN
+    b.TextColor3 = Color3.new(1, 1, 1)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = ts or 13
+    b.Text = text
+    b.Parent = parent
+    corner(b, 8)
+    return b
+end
+
+-- ===== WINDOW UTAMA =====
+local W, H = 330, 300
+
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.fromOffset(W, H)
+main.Position = UDim2.new(0.5, -W / 2, 0.5, -H / 2)
+main.BackgroundColor3 = C_BG
+main.Active = true
+main.Draggable = true
+main.Parent = gui
+corner(main, 12)
+local mainStroke = Instance.new("UIStroke")
+mainStroke.Color = GOLD
+mainStroke.Thickness = 1.5
+mainStroke.Parent = main
+
+mkLabel(main, "AZZURA HUB by Azhari", UDim2.fromOffset(12, 0), UDim2.new(1, -90, 0, 34), 15, GOLD)
+
+local minimize = mkBtn(main, "-", UDim2.new(1, -66, 0, 5), UDim2.fromOffset(28, 24), 14)
+local close = mkBtn(main, "X", UDim2.new(1, -34, 0, 5), UDim2.fromOffset(28, 24), 14)
+close.BackgroundColor3 = C_RED
+
+local body = Instance.new("Frame")
+body.Name = "Body"
+body.Size = UDim2.new(1, 0, 1, -34)
+body.Position = UDim2.fromOffset(0, 34)
+body.BackgroundTransparency = 1
+body.Parent = main
+
+local minimized = false
+local function setMinimized(v)
+    minimized = v
+    body.Visible = not v
+    main.Size = v and UDim2.fromOffset(W, 36) or UDim2.fromOffset(W, H)
+    minimize.Text = v and "+" or "-"
+end
+minimize.Activated:Connect(function() setMinimized(not minimized) end)
+
+-- Popup konfirmasi close
+local confirm = Instance.new("Frame")
+confirm.Name = "Confirm"
+confirm.Size = UDim2.fromScale(1, 1)
+confirm.BackgroundColor3 = C_BG
+confirm.BackgroundTransparency = 0.02
+confirm.Active = true
+confirm.Visible = false
+confirm.ZIndex = 20
+confirm.Parent = main
+corner(confirm, 12)
+
+local cLabel = mkLabel(confirm, "Anda yakin mau close\nAZZURA HUB?",
+    UDim2.new(0, 10, 0, 70), UDim2.new(1, -20, 0, 60), 18, Color3.new(1, 1, 1), Enum.TextXAlignment.Center)
+cLabel.TextWrapped = true
+cLabel.ZIndex = 21
+
+local yesBtn = mkBtn(confirm, "YA, CLOSE", UDim2.new(0, 16, 0, 160), UDim2.new(0.5, -22, 0, 42), 14)
+yesBtn.BackgroundColor3 = C_RED
+yesBtn.ZIndex = 21
+local noBtn = mkBtn(confirm, "BATAL", UDim2.new(0.5, 6, 0, 160), UDim2.new(0.5, -22, 0, 42), 14)
+noBtn.ZIndex = 21
+
+-- Bar radar Opah
+local radar = Instance.new("Frame")
+radar.Position = UDim2.fromOffset(8, 2)
+radar.Size = UDim2.new(1, -16, 0, 26)
+radar.BackgroundColor3 = C_BAR
+radar.Parent = body
+corner(radar, 8)
+local radarText = mkLabel(radar, "OPAH | mencari...", UDim2.fromOffset(8, 0), UDim2.new(1, -16, 1, 0), 13, Color3.fromRGB(120, 220, 160))
+
+-- Bar passcode
+local passBar = Instance.new("Frame")
+passBar.Position = UDim2.fromOffset(8, 32)
+passBar.Size = UDim2.new(1, -16, 0, 32)
+passBar.BackgroundColor3 = C_BAR
+passBar.Parent = body
+corner(passBar, 8)
+mkLabel(passBar, "PASSCODE", UDim2.fromOffset(8, 0), UDim2.fromOffset(70, 32), 10, GRAY)
+local passCode = mkLabel(passBar, "----", UDim2.fromOffset(80, 0), UDim2.new(1, -160, 1, 0), 22, Color3.new(1, 1, 1))
+local copyBtn = mkBtn(passBar, "COPY", UDim2.new(1, -72, 0, 4), UDim2.fromOffset(64, 24), 12)
+
+-- Tab
+local holder = Instance.new("Frame")
+holder.Position = UDim2.fromOffset(8, 98)
+holder.Size = UDim2.new(1, -16, 0, 162)
+holder.BackgroundTransparency = 1
+holder.ClipsDescendants = true
+holder.Parent = body
+
+local function makePage()
+    local s = Instance.new("ScrollingFrame")
+    s.Size = UDim2.fromScale(1, 1)
+    s.BackgroundTransparency = 1
+    s.BorderSizePixel = 0
+    s.ScrollBarThickness = 3
+    s.CanvasSize = UDim2.new()
+    s.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    s.Visible = false
+    s.Parent = holder
+    return s
+end
+
+local pageESP, pageInfo, pageMisc, pageAuto = makePage(), makePage(), makePage(), makePage()
+local pages = {pageESP, pageInfo, pageMisc, pageAuto}
+local tabNames = {"ESP", "INFO", "MISC", "AUTO"}
+local tabBtns = {}
+
+local function showTab(idx)
+    for i, p in ipairs(pages) do
+        p.Visible = (i == idx)
+        tabBtns[i].BackgroundColor3 = (i == idx) and Color3.fromRGB(70, 62, 25) or C_BTN
+        tabBtns[i].TextColor3 = (i == idx) and GOLD or Color3.new(1, 1, 1)
+    end
+end
+
+for i, name in ipairs(tabNames) do
+    local b = mkBtn(body, name, UDim2.fromOffset(8 + (i - 1) * 78, 68), UDim2.fromOffset(74, 26), 12)
+    tabBtns[i] = b
+    b.Activated:Connect(function() showTab(i) end)
+end
+showTab(1)
+
+local allFeatures = {}
+
+-- =====================================================
+-- HELPER BERSAMA + INDEX (CACHE) BIAR NGGAK LAG
+-- =====================================================
+local function hasOpahAncestor(obj)
+    local p = obj.Parent
+    while p and p ~= Workspace do
+        if p:IsA("Model") and p.Name:lower():find("opah", 1, true) then
+            return true
+        end
+        p = p.Parent
+    end
+    return false
+end
+
+local EXIT_WORDS = {"exit", "keluar", "escape", "kabur", "gerbang", "finish", "gate"}
+
+local function hasExitWord(s)
+    s = tostring(s):lower()
+    for _, w in ipairs(EXIT_WORDS) do
+        if s:find(w, 1, true) then return true end
+    end
+    return false
+end
+
+local function isKeyName(n)
+    return (n:find("key", 1, true) or n:find("kunci", 1, true))
+        and not n:find("monkey", 1, true)
+        and not n:find("keypad", 1, true)
+        and not n:find("keyboard", 1, true)
+        and not n:find("keyhole", 1, true)
+end
+
+local function getHrp()
+    local c = player.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+
+local function mine(obj)
+    local c = player.Character
+    if c and obj:IsDescendantOf(c) then return true end
+    local bp = player:FindFirstChildOfClass("Backpack")
+    if bp and obj:IsDescendantOf(bp) then return true end
+    return false
+end
+
+local function partOf(obj)
+    if obj:IsA("BasePart") then return obj end
+    if obj:IsA("Model") then
+        return obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+    end
+    return obj:FindFirstChild("Handle") or obj:FindFirstChildWhichIsA("BasePart", true)
+end
+
+-- part tempat prompt / click detector menempel
+local function anchorPart(inst)
+    local p = inst.Parent
+    if not p then return nil end
+    if p:IsA("Attachment") then p = p.Parent end
+    if p and p:IsA("Model") then p = p.PrimaryPart or p:FindFirstChildWhichIsA("BasePart", true) end
+    if p and p:IsA("BasePart") then return p end
+    return nil
+end
+
+-- Index: daftar objek penting disimpan sekali, diupdate lewat event (bukan scan terus-menerus)
+local Index = {
+    ready = false,
+    keys = {}, opah = {}, prompts = {}, clicks = {}, passText = {}, exits = {},
+}
+local indexSets = {Index.keys, Index.opah, Index.prompts, Index.clicks, Index.passText, Index.exits}
+
+local function classify(d)
+    if d:IsA("ProximityPrompt") then
+        Index.prompts[d] = true
+    elseif d:IsA("ClickDetector") then
+        Index.clicks[d] = true
+    elseif d:IsA("TextLabel") or d:IsA("TextBox") then
+        Index.passText[d] = true
+    elseif d:IsA("StringValue") or d:IsA("IntValue") or d:IsA("NumberValue") then
+        local n = d.Name:lower()
+        if n:find("pass", 1, true) or n:find("code", 1, true) or n:find("sandi", 1, true) then
+            Index.passText[d] = true
+        end
+    end
+
+    if d:IsA("Model") or d:IsA("BasePart") or d:IsA("Tool") then
+        local n = d.Name:lower()
+        if isKeyName(n) then Index.keys[d] = true end
+        if d:IsA("Model") and n:find("opah", 1, true)
+            and not n:find("motor", 1, true) and not n:find("vehicle", 1, true) then
+            Index.opah[d] = true
+        end
+        if (d:IsA("BasePart") or d:IsA("Model")) and hasExitWord(n) then
+            Index.exits[d] = true
+        end
+    end
+end
+
+local function unindex(d)
+    for _, s in ipairs(indexSets) do s[d] = nil end
+end
+
+task.spawn(function()
+    local list = Workspace:GetDescendants()
+    for i, d in ipairs(list) do
+        pcall(classify, d)
+        if i % 300 == 0 then task.wait() end
+    end
+    Index.ready = true
+end)
+track(Workspace.DescendantAdded:Connect(function(d) pcall(classify, d) end))
+track(Workspace.DescendantRemoving:Connect(function(d) unindex(d) end))
+
+local function waitIndex()
+    local t0 = os.clock()
+    while not Index.ready and os.clock() - t0 < 15 do task.wait(0.2) end
+end
+
+-- Kunci paling luar (bukan bagian dari kunci lain), yang belum kita bawa
+local function topKeys()
+    local result = {}
+    for obj in pairs(Index.keys) do
+        if obj.Parent and obj:IsDescendantOf(Workspace) and not mine(obj) then
+            local nested = false
+            local p = obj.Parent
+            while p and p ~= Workspace do
+                if Index.keys[p] then
+                    nested = true
+                    break
+                end
+                p = p.Parent
+            end
+            if not nested then
+                local part = partOf(obj)
+                if part then table.insert(result, {obj = obj, part = part}) end
+            end
+        end
+    end
+    return result
+end
+
+-- Opah terdekat: obj, part, jarak (math.huge kalau tidak ada)
+local function findOpah()
+    local hrp = getHrp()
+    local best, bestPart, bestDist = nil, nil, math.huge
+    for obj in pairs(Index.opah) do
+        if obj.Parent and not hasOpahAncestor(obj) then
+            local part = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart", true)
+            if part then
+                local dist = hrp and (part.Position - hrp.Position).Magnitude or math.huge
+                if dist < bestDist then
+                    best, bestPart, bestDist = obj, part, dist
+                end
+            end
+        end
+    end
+    return best, bestPart, bestDist
+end
+
+-- Pintu keluar: prompt bertuliskan keluar dulu, lalu part/model bernama keluar (yang terdekat)
+local function findExit()
+    local hrp = getHrp()
+    local bestObj, bestPart, bestDist = nil, nil, math.huge
+
+    for pp in pairs(Index.prompts) do
+        if pp.Parent and (hasExitWord(pp.ActionText) or hasExitWord(pp.ObjectText) or hasExitWord(pp.Name)) then
+            local part = anchorPart(pp)
+            if part then
+                local dist = hrp and (part.Position - hrp.Position).Magnitude or 0
+                if dist < bestDist then bestObj, bestPart, bestDist = pp, part, dist end
+            end
+        end
+    end
+    if bestObj then return bestObj, bestPart end
+
+    for d in pairs(Index.exits) do
+        if d.Parent then
+            local part = partOf(d)
+            if part then
+                local dist = hrp and (part.Position - hrp.Position).Magnitude or 0
+                if dist < bestDist then bestObj, bestPart, bestDist = d, part, dist end
+            end
+        end
+    end
+    return bestObj, bestPart
+end
+
+-- Semua prompt / click detector di sekitar karakter
+local function nearby(radius)
+    local hrp = getHrp()
+    local res = {prompts = {}, clicks = {}}
+    if not hrp then return res end
+    for d in pairs(Index.prompts) do
+        if d.Parent then
+            local part = anchorPart(d)
+            if part then
+                local dist = (part.Position - hrp.Position).Magnitude
+                if dist <= radius then table.insert(res.prompts, {inst = d, dist = dist, part = part}) end
+            end
+        end
+    end
+    for d in pairs(Index.clicks) do
+        if d.Parent then
+            local part = anchorPart(d)
+            if part then
+                local dist = (part.Position - hrp.Position).Magnitude
+                if dist <= radius then table.insert(res.clicks, {inst = d, dist = dist, part = part}) end
+            end
+        end
+    end
+    return res
+end
+
+local PASS_WORDS = {"pass", "code", "note", "sandi", "kertas", "paper", "memo"}
+
+local function nameHasPassWord(inst)
+    local p = inst
+    while p and p ~= Workspace do
+        local n = p.Name:lower()
+        for _, w in ipairs(PASS_WORDS) do
+            if n:find(w, 1, true) then return true end
+        end
+        p = p.Parent
+    end
+    return false
+end
+
+local function findPasscode()
+    local fallback = nil
+    for d in pairs(Index.passText) do
+        if d.Parent then
+            if d:IsA("TextLabel") or d:IsA("TextBox") then
+                local t = (d.Text:gsub("%s", ""))
+                if t:match("^%d+$") and #t >= 3 and #t <= 6 then
+                    if nameHasPassWord(d) then
+                        return t
+                    end
+                    if not fallback and d:FindFirstAncestorWhichIsA("SurfaceGui") then
+                        fallback = t
+                    end
+                end
+            else
+                local t = tostring(d.Value)
+                if t:match("^%d+$") and #t >= 3 and #t <= 6 then
+                    return t
+                end
+            end
+        end
+    end
+    return fallback
+end
+
+-- Jalan lagi otomatis setelah REJOIN / HOP (butuh RELOAD_URL)
+local reloadStatus = "mati (isi RELOAD_URL di atas script)"
+do
+    local qot = queue_on_teleport or queueonteleport or (syn and syn.queue_on_teleport)
+    if RELOAD_URL ~= "" then
+        if qot then
+            local ok = pcall(function()
+                qot('loadstring(game:HttpGet("' .. RELOAD_URL .. '"))()')
+            end)
+            reloadStatus = ok and "aktif" or "gagal"
+        else
+            reloadStatus = "executor tidak mendukung"
+        end
+    end
+end
+
+-- =====================================================
+-- MODUL 1: ESP (KUNCI, OPAH, PLAYER) + ATUR JARAK
+-- =====================================================
+safe("ESP", function()
+    local espRange = 300
+    local RANGE_MIN, RANGE_MAX, RANGE_STEP = 50, 1000, 50
+
+    local function makeFeature(scanFn, ignoreRange)
+        local f = {on = false, items = {}, tagged = {}, session = 0, onCount = nil}
+
+        function f.count()
+            local n = 0
+            for _ in pairs(f.tagged) do n = n + 1 end
+            return n
+        end
+
+        function f.isInside(obj)
+            local p = obj.Parent
+            while p do
+                if f.tagged[p] then return true end
+                p = p.Parent
+            end
+            return false
+        end
+
+        function f.tag(obj, part, text, color, size)
+            if f.tagged[obj] then return end
+
+            local hl = Instance.new("Highlight")
+            hl.Name = "AzzuraTag"
+            hl.Adornee = obj
+            hl.FillColor = color
+            hl.OutlineColor = color
+            hl.FillTransparency = 0.4
+            hl.Parent = obj
+            table.insert(f.items, hl)
+
+            local bgui = Instance.new("BillboardGui")
+            bgui.Name = "AzzuraTag"
+            bgui.Size = UDim2.new(0, 170, 0, 30)
+            bgui.StudsOffset = Vector3.new(0, 2.5, 0)
+            bgui.AlwaysOnTop = true
+            bgui.Adornee = part
+            bgui.Parent = part
+            table.insert(f.items, bgui)
+
+            local txt = Instance.new("TextLabel")
+            txt.Size = UDim2.new(1, 0, 1, 0)
+            txt.BackgroundTransparency = 1
+            txt.Text = text
+            txt.TextColor3 = color
+            txt.TextStrokeTransparency = 0
+            txt.Font = Enum.Font.GothamBold
+            txt.TextSize = size or 13
+            txt.Parent = bgui
+
+            f.tagged[obj] = {part = part, hl = hl, bgui = bgui, txt = txt, base = text}
+        end
+
+        function f.refresh()
+            local hrp = getHrp()
+            for obj, e in pairs(f.tagged) do
+                if obj.Parent and e.part and e.part.Parent and hrp then
+                    local dist = (e.part.Position - hrp.Position).Magnitude
+                    local visible = ignoreRange or dist <= espRange
+                    e.bgui.Enabled = visible
+                    e.hl.Enabled = visible
+                    e.txt.Text = e.base .. " [" .. math.floor(dist) .. "m]"
+                end
+            end
+        end
+
+        function f.clear()
+            for _, i in ipairs(f.items) do
+                pcall(function() i:Destroy() end)
+            end
+            f.items = {}
+            f.tagged = {}
+        end
+
+        function f.set(state)
+            f.on = state
+            f.session = f.session + 1
+            if state then
+                local mySession = f.session
+                task.spawn(function()
+                    local lastScan = 0
+                    while f.on and f.session == mySession and gui.Parent do
+                        if os.clock() - lastScan >= 2 then
+                            lastScan = os.clock()
+                            for obj in pairs(f.tagged) do
+                                if not obj.Parent then f.tagged[obj] = nil end
+                            end
+                            local ok, err = pcall(scanFn, f)
+                            if not ok then warn("AZZURA ERROR: " .. tostring(err)) end
+                            if f.onCount then pcall(f.onCount, f.count()) end
+                        end
+                        pcall(f.refresh)
+                        task.wait(0.25)
+                    end
+                end)
+            else
+                f.clear()
+            end
+        end
+
+        table.insert(allFeatures, f)
+        return f
+    end
+
+    -- ESP KUNCI
+    local KEY_COLORS = {
+        {{"yellow", "kuning"}, "KUNCI KUNING", Color3.fromRGB(255, 255, 0)},
+        {{"red", "merah"},     "KUNCI MERAH",  Color3.fromRGB(255, 0, 0)},
+        {{"green", "hijau"},   "KUNCI HIJAU",  Color3.fromRGB(0, 255, 0)},
+        {{"purple", "ungu"},   "KUNCI UNGU",   Color3.fromRGB(180, 0, 255)},
+        {{"blue", "biru"},     "KUNCI BIRU",   Color3.fromRGB(0, 150, 255)},
+    }
+
+    local function colorDistance(a, b)
+        return (a.R - b.R) ^ 2 + (a.G - b.G) ^ 2 + (a.B - b.B) ^ 2
+    end
+
+    local function getPartColor(obj)
+        if obj:IsA("BasePart") then return obj.Color end
+        local bestColor, bestSat = nil, -1
+        for _, d in ipairs(obj:GetDescendants()) do
+            if d:IsA("BasePart") then
+                local _, s = d.Color:ToHSV()
+                if s > bestSat then
+                    bestSat = s
+                    bestColor = d.Color
+                end
+            end
+        end
+        return bestColor
+    end
+
+    local function getKeyInfo(nameLower, obj)
+        for _, entry in ipairs(KEY_COLORS) do
+            for _, word in ipairs(entry[1]) do
+                if nameLower:find(word, 1, true) then
+                    return entry[2], entry[3]
+                end
+            end
+        end
+        local c = getPartColor(obj)
+        if c then
+            local best, bestDist = KEY_COLORS[1], math.huge
+            for _, entry in ipairs(KEY_COLORS) do
+                local d = colorDistance(c, entry[3])
+                if d < bestDist then
+                    bestDist = d
+                    best = entry
+                end
+            end
+            return best[2], best[3]
+        end
+        return "KUNCI", Color3.fromRGB(255, 255, 255)
+    end
+
+    local keyFeature = makeFeature(function(f)
+        for _, k in ipairs(topKeys()) do
+            if not f.tagged[k.obj] and not f.isInside(k.obj) then
+                local label, color = getKeyInfo(k.obj.Name:lower(), k.obj)
+                f.tag(k.obj, k.part, label, color, 13)
+            end
+        end
+    end)
+
+    -- ESP OPAH (1 saja, terdekat, selalu tampil)
+    local opahFeature = makeFeature(function(f)
+        local best, bestPart = findOpah()
+        if not best then
+            f.clear()
+            f.current = nil
+        elseif f.current ~= best or not f.tagged[best] then
+            f.clear()
+            f.current = best
+            f.tag(best, bestPart, "OPAH", Color3.fromRGB(255, 0, 0), 14)
+        end
+    end, true)
+
+    -- ESP PLAYER
+    local playerFeature = makeFeature(function(f)
+        for _, p in ipairs(Players:GetPlayers()) do
+            if p ~= player and p.Character then
+                local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+                if hrp and not f.tagged[p.Character] then
+                    f.tag(p.Character, hrp, p.Name, Color3.fromRGB(0, 255, 255), 12)
+                end
+            end
+        end
+    end)
+
+    -- Tombol ESP
+    local list = {
+        {"ESP KUNCI", keyFeature},
+        {"ESP OPAH", opahFeature},
+        {"ESP PLAYER", playerFeature},
+    }
+
+    for i, data in ipairs(list) do
+        local name, feature = data[1], data[2]
+        local b = mkBtn(pageESP, name .. " : OFF", UDim2.fromOffset(0, (i - 1) * 34), UDim2.new(1, -6, 0, 30))
+        local enabled = false
+
+        feature.onCount = function(n)
+            if enabled then
+                b.Text = name .. " : ON (" .. n .. ")"
+            end
+        end
+
+        b.Activated:Connect(function()
+            enabled = not enabled
+            b.Text = name .. (enabled and " : ON (0)" or " : OFF")
+            b.BackgroundColor3 = enabled and C_ON or C_BTN
+            local ok, err = pcall(feature.set, enabled)
+            if not ok then warn("AZZURA ERROR: " .. tostring(err)) end
+        end)
+    end
+
+    -- Atur jarak
+    local rangeY = #list * 34
+    local minusBtn = mkBtn(pageESP, "-", UDim2.fromOffset(0, rangeY), UDim2.fromOffset(60, 30))
+    local rangeLabel = mkLabel(pageESP, "", UDim2.fromOffset(64, rangeY), UDim2.new(1, -134, 0, 30), 13, GOLD, Enum.TextXAlignment.Center)
+    local plusBtn = mkBtn(pageESP, "+", UDim2.new(1, -66, 0, rangeY), UDim2.fromOffset(60, 30))
+
+    local function updateRangeLabel()
+        rangeLabel.Text = "JARAK: " .. espRange .. "m"
+    end
+    updateRangeLabel()
+
+    minusBtn.Activated:Connect(function()
+        espRange = math.max(RANGE_MIN, espRange - RANGE_STEP)
+        updateRangeLabel()
+    end)
+    plusBtn.Activated:Connect(function()
+        espRange = math.min(RANGE_MAX, espRange + RANGE_STEP)
+        updateRangeLabel()
+    end)
+end)
+
+-- =====================================================
+-- MODUL 2: RADAR OPAH + PASSCODE NOTE
+-- =====================================================
+safe("RADAR_PASSCODE", function()
+    local foundCode = nil
+    copyBtn.Activated:Connect(function()
+        if not foundCode then return end
+        local ok = pcall(function()
+            if setclipboard then
+                setclipboard(foundCode)
+            elseif toclipboard then
+                toclipboard(foundCode)
+            else
+                error("no clipboard")
+            end
+        end)
+        copyBtn.Text = ok and "COPIED" or "GAGAL"
+        task.delay(1, function() copyBtn.Text = "COPY" end)
+    end)
+
+    local function getOpahState(model, part)
+        for _, key in ipairs({"State", "state", "Mode", "Status", "AIState"}) do
+            local v = model:GetAttribute(key)
+            if v ~= nil then return tostring(v) end
+            local c = model:FindFirstChild(key)
+            if c and c:IsA("ValueBase") then return tostring(c.Value) end
+        end
+        local vel = part.AssemblyLinearVelocity.Magnitude
+        return vel > 2 and "Bergerak" or "Diam"
+    end
+
+    task.spawn(function()
+        local lastPass = 0
+        while gui.Parent do
+            local ok, err = pcall(function()
+                local opah, opahPart, dist = findOpah()
+                if opah and opahPart and dist ~= math.huge then
+                    local state = getOpahState(opah, opahPart)
+                    radarText.Text = "OPAH | " .. state .. " | " .. math.floor(dist) .. " studs"
+                    radarText.TextColor3 = dist < 40 and Color3.fromRGB(255, 80, 80)
+                        or Color3.fromRGB(120, 220, 160)
+                else
+                    radarText.Text = "OPAH | tidak ditemukan"
+                    radarText.TextColor3 = GRAY
+                end
+
+                if os.clock() - lastPass > 2 then
+                    lastPass = os.clock()
+                    local code = findPasscode()
+                    if code then
+                        foundCode = code
+                        passCode.Text = code
+                    end
+                end
+            end)
+            if not ok then warn("AZZURA [RADAR] ERROR: " .. tostring(err)) end
+            task.wait(0.3)
+        end
+    end)
+end)
+
+-- =====================================================
+-- MODUL 3: INFO (FPS, PING, REJOIN, HOP, DLL)
+-- =====================================================
+safe("INFO", function()
+    local Stats = game:GetService("Stats")
+    local TeleportService = game:GetService("TeleportService")
+    local HttpService = game:GetService("HttpService")
+    local MarketplaceService = game:GetService("MarketplaceService")
+
+    local avatar = Instance.new("ImageLabel")
+    avatar.Size = UDim2.fromOffset(40, 40)
+    avatar.Position = UDim2.fromOffset(0, 0)
+    avatar.BackgroundColor3 = C_BTN
+    avatar.Parent = pageInfo
+    corner(avatar, 8)
+
+    mkLabel(pageInfo, "WELCOME BACK,", UDim2.fromOffset(48, 0), UDim2.fromOffset(150, 12), 10, GRAY)
+    mkLabel(pageInfo, string.lower(player.DisplayName), UDim2.fromOffset(48, 11), UDim2.fromOffset(200, 20), 16)
+    mkLabel(pageInfo, "@" .. player.Name, UDim2.fromOffset(48, 29), UDim2.fromOffset(150, 12), 10, GRAY)
+
+    task.spawn(function()
+        local ok, img = pcall(function()
+            return Players:GetUserThumbnailAsync(player.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+        end)
+        if ok and img then avatar.Image = img end
+    end)
+
+    local function mkRow(name, y)
+        mkLabel(pageInfo, name, UDim2.fromOffset(0, y), UDim2.fromOffset(90, 18), 11, GRAY)
+        local v = mkLabel(pageInfo, "-", UDim2.fromOffset(90, y), UDim2.new(1, -102, 0, 18), 12, Color3.new(1, 1, 1), Enum.TextXAlignment.Right)
+        v.TextTruncate = Enum.TextTruncate.AtEnd
+        return v
+    end
+
+    local fpsVal = mkRow("FPS", 48)
+    local pingVal = mkRow("Ping", 66)
+    local playersVal = mkRow("Players", 84)
+    local sessionVal = mkRow("Session", 102)
+    local gameVal = mkRow("Game", 120)
+    local execVal = mkRow("Executor", 138)
+
+    gameVal.Text = "MALAM SAMA OPAH"
+    task.spawn(function()
+        local ok, data = pcall(function()
+            return MarketplaceService:GetProductInfo(game.PlaceId)
+        end)
+        if ok and data and data.Name then gameVal.Text = data.Name end
+    end)
+
+    local exName = "Unknown"
+    pcall(function()
+        if identifyexecutor then exName = (identifyexecutor()) end
+    end)
+    execVal.Text = tostring(exName)
+
+    local frames = 0
+    track(RunService.RenderStepped:Connect(function() frames = frames + 1 end))
+
+    local startTime = os.clock()
+    local function fmtTime(sec)
+        sec = math.floor(sec)
+        return math.floor(sec / 60) .. "m " .. (sec % 60) .. "s"
+    end
+
+    task.spawn(function()
+        while gui.Parent do
+            local fps = frames
+            frames = 0
+            fpsVal.Text = fps .. " fps"
+
+            local ping = 0
+            pcall(function()
+                ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue())
+            end)
+            pingVal.Text = ping .. " ms"
+
+            playersVal.Text = #Players:GetPlayers() .. "/" .. Players.MaxPlayers
+            sessionVal.Text = fmtTime(os.clock() - startTime)
+            task.wait(1)
+        end
+    end)
+
+    local function mkAction(text, col, y)
+        local x = col == 0 and UDim2.new(0, 0, 0, y) or UDim2.new(0.5, 3, 0, y)
+        return mkBtn(pageInfo, text, x, UDim2.new(0.5, -9, 0, 28), 12)
+    end
+
+    local rejoinBtn = mkAction("REJOIN", 0, 164)
+    local hopBtn = mkAction("HOP", 1, 164)
+    local lowestBtn = mkAction("LOWEST", 0, 196)
+    local jobBtn = mkAction("JOB ID", 1, 196)
+
+    local function flash(btn, text, back)
+        btn.Text = text
+        task.delay(1.5, function() btn.Text = back end)
+    end
+
+    local function getServers()
+        local url = "https://games.roblox.com/v1/games/" .. game.PlaceId
+            .. "/servers/Public?sortOrder=Asc&limit=100"
+        local ok, res = pcall(function()
+            return HttpService:JSONDecode(game:HttpGet(url))
+        end)
+        if ok and res and res.data then return res.data end
+        return nil
+    end
+
+    local function joinServer(btn, label, pickFn)
+        btn.Text = "..."
+        task.spawn(function()
+            local servers = getServers()
+            if not servers then
+                flash(btn, "GAGAL", label)
+                return
+            end
+            local candidates = {}
+            for _, s in ipairs(servers) do
+                if s.id ~= game.JobId and s.playing and s.maxPlayers and s.playing < s.maxPlayers then
+                    table.insert(candidates, s)
+                end
+            end
+            local target = pickFn(candidates)
+            if not target then
+                flash(btn, "TIDAK ADA", label)
+                return
+            end
+            local ok = pcall(function()
+                TeleportService:TeleportToPlaceInstance(game.PlaceId, target.id, player)
+            end)
+            if not ok then flash(btn, "GAGAL", label) end
+        end)
+    end
+
+    rejoinBtn.Activated:Connect(function()
+        local ok = pcall(function()
+            TeleportService:TeleportToPlaceInstance(game.PlaceId, game.JobId, player)
+        end)
+        if not ok then flash(rejoinBtn, "GAGAL", "REJOIN") end
+    end)
+
+    hopBtn.Activated:Connect(function()
+        joinServer(hopBtn, "HOP", function(list)
+            if #list == 0 then return nil end
+            return list[math.random(1, #list)]
+        end)
+    end)
+
+    lowestBtn.Activated:Connect(function()
+        joinServer(lowestBtn, "LOWEST", function(list)
+            local best = nil
+            for _, s in ipairs(list) do
+                if not best or s.playing < best.playing then best = s end
+            end
+            return best
+        end)
+    end)
+
+    jobBtn.Activated:Connect(function()
+        local ok = pcall(function()
+            if setclipboard then
+                setclipboard(game.JobId)
+            elseif toclipboard then
+                toclipboard(game.JobId)
+            else
+                error("no clipboard")
+            end
+        end)
+        flash(jobBtn, ok and "COPIED" or "GAGAL", "JOB ID")
+    end)
+
+    local shortJob = game.JobId ~= "" and (string.sub(game.JobId, 1, 8) .. "..." .. string.sub(game.JobId, -4)) or "-"
+    mkLabel(pageInfo, "Job " .. shortJob .. "  |  Place " .. game.PlaceId, UDim2.fromOffset(0, 232), UDim2.new(1, -6, 0, 16), 9, GRAY)
+    mkLabel(pageInfo, "Auto-load ulang: " .. reloadStatus, UDim2.fromOffset(0, 250), UDim2.new(1, -6, 0, 16), 9, GRAY)
+end)
+
+-- =====================================================
+-- MODUL 4: MISC (SPEED + DOUBLE JUMP)
+-- =====================================================
+safe("MISC", function()
+    local SMIN, SMAX, SSTEP = 16, 100, 8
+    local speedOn, speedVal, origSpeed = false, 32, 16
+    local djOn, floatOn = false, false
+    local extra, lastGround, lastDouble = 1, os.clock(), 0
+    local boundHum, speedConn = nil, nil
+
+    local function getHum()
+        local c = player.Character
+        local h = c and c:FindFirstChildOfClass("Humanoid")
+        if h and h.Health > 0 then return h end
+        return nil
+    end
+
+    local function getRoot(hum)
+        return hum.RootPart or (hum.Parent and hum.Parent:FindFirstChild("HumanoidRootPart"))
+    end
+
+    -- UI
+    local speedBtn = mkBtn(pageMisc, "SPEED : OFF", UDim2.fromOffset(0, 0), UDim2.new(1, -6, 0, 30))
+    local sMinus = mkBtn(pageMisc, "-", UDim2.fromOffset(0, 34), UDim2.fromOffset(60, 30))
+    local sLabel = mkLabel(pageMisc, "", UDim2.fromOffset(64, 34), UDim2.new(1, -134, 0, 30), 13, GOLD, Enum.TextXAlignment.Center)
+    local sPlus = mkBtn(pageMisc, "+", UDim2.new(1, -66, 0, 34), UDim2.fromOffset(60, 30))
+    local djBtn = mkBtn(pageMisc, "DOUBLE JUMP : OFF", UDim2.fromOffset(0, 68), UDim2.new(1, -6, 0, 30))
+    local floatBtn = mkBtn(pageMisc, "TOMBOL 2x JUMP : OFF", UDim2.fromOffset(0, 102), UDim2.new(1, -6, 0, 30))
+
+    -- Tombol melayang 2x JUMP (opsional, default tersembunyi)
+    local djFloat = Instance.new("TextButton")
+    djFloat.Name = "DJFloat"
+    djFloat.Size = UDim2.fromOffset(64, 64)
+    djFloat.Position = UDim2.new(1, -150, 1, -150)
+    djFloat.BackgroundColor3 = C_ON
+    djFloat.BackgroundTransparency = 0.2
+    djFloat.TextColor3 = Color3.new(1, 1, 1)
+    djFloat.Font = Enum.Font.GothamBold
+    djFloat.TextSize = 13
+    djFloat.Text = "2x\nJUMP"
+    djFloat.Active = true
+    djFloat.Draggable = true
+    djFloat.Visible = false
+    djFloat.Parent = gui
+    corner(djFloat, 32)
+
+    local function updFloat()
+        djFloat.Visible = djOn and floatOn
+    end
+
+    local function updSpeedLabel()
+        sLabel.Text = "SPEED: " .. speedVal
+    end
+    updSpeedLabel()
+
+    -- ===== SPEED =====
+    local function applySpeed(hum)
+        if speedOn and hum.WalkSpeed ~= speedVal then
+            hum.WalkSpeed = speedVal
+        end
+    end
+
+    -- Pantau perubahan WalkSpeed: kalau game reset speed, langsung timpa lagi
+    local function bind(hum)
+        if boundHum == hum then return end
+        if speedConn then speedConn:Disconnect() end
+        boundHum = hum
+        speedConn = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            local ws = hum.WalkSpeed
+            if speedOn then
+                if ws ~= speedVal then
+                    origSpeed = ws
+                    hum.WalkSpeed = speedVal
+                end
+            else
+                origSpeed = ws
+            end
+        end)
+    end
+
+    speedBtn.Activated:Connect(function()
+        speedOn = not speedOn
+        local hum = getHum()
+        if hum then
+            if speedOn then
+                origSpeed = hum.WalkSpeed
+                hum.WalkSpeed = speedVal
+            else
+                hum.WalkSpeed = origSpeed
+            end
+        end
+        speedBtn.Text = "SPEED : " .. (speedOn and "ON" or "OFF")
+        speedBtn.BackgroundColor3 = speedOn and C_ON or C_BTN
+    end)
+
+    sMinus.Activated:Connect(function()
+        speedVal = math.max(SMIN, speedVal - SSTEP)
+        updSpeedLabel()
+    end)
+    sPlus.Activated:Connect(function()
+        speedVal = math.min(SMAX, speedVal + SSTEP)
+        updSpeedLabel()
+    end)
+
+    -- ===== DOUBLE JUMP =====
+    local ST = Enum.HumanoidStateType
+
+    local function tryDouble()
+        if not djOn then return end
+        local hum = getHum()
+        if not hum then return end
+
+        local st = hum:GetState()
+        local inAir = hum.FloorMaterial == Enum.Material.Air or st == ST.Freefall or st == ST.Jumping
+        if not inAir or extra <= 0 then return end
+
+        local t = os.clock()
+        if t - lastGround < 0.15 or t - lastDouble < 0.25 then return end
+
+        local hrp = getRoot(hum)
+        if not hrp then return end
+
+        extra = extra - 1
+        lastDouble = t
+
+        local power = hum.UseJumpPower and hum.JumpPower or math.sqrt(2 * Workspace.Gravity * hum.JumpHeight)
+        if power < 40 then power = 50 end -- kalau game matiin lompat (power 0), pakai nilai default
+
+        pcall(function() hum:SetStateEnabled(ST.Jumping, true) end)
+        local v = hrp.AssemblyLinearVelocity
+        hrp.AssemblyLinearVelocity = Vector3.new(v.X, power, v.Z)
+        pcall(function() hum:ChangeState(ST.Jumping) end)
+    end
+
+    djBtn.Activated:Connect(function()
+        djOn = not djOn
+        djBtn.Text = "DOUBLE JUMP : " .. (djOn and "ON" or "OFF")
+        djBtn.BackgroundColor3 = djOn and C_ON or C_BTN
+        updFloat()
+    end)
+
+    floatBtn.Activated:Connect(function()
+        floatOn = not floatOn
+        floatBtn.Text = "TOMBOL 2x JUMP : " .. (floatOn and "ON" or "OFF")
+        floatBtn.BackgroundColor3 = floatOn and C_ON or C_BTN
+        updFloat()
+    end)
+
+    djFloat.MouseButton1Down:Connect(tryDouble)
+    track(UIS.JumpRequest:Connect(tryDouble))
+    track(UIS.InputBegan:Connect(function(input)
+        if input.KeyCode == Enum.KeyCode.Space then tryDouble() end
+    end))
+
+    -- ===== LOOP UTAMA =====
+    local function enforce()
+        local hum = getHum()
+        if not hum then return end
+        bind(hum)
+        applySpeed(hum)
+    end
+
+    track(RunService.Stepped:Connect(enforce))
+    track(RunService.RenderStepped:Connect(enforce))
+    track(RunService.Heartbeat:Connect(function()
+        local hum = getHum()
+        if not hum then return end
+        bind(hum)
+        applySpeed(hum)
+
+        -- reset jatah double jump saat napak tanah
+        local st = hum:GetState()
+        if hum.FloorMaterial ~= Enum.Material.Air
+            or st == ST.Running or st == ST.Landed or st == ST.RunningNoPhysics then
+            extra = 1
+            lastGround = os.clock()
+        end
+    end))
+
+    table.insert(cleanups, function()
+        if speedConn then speedConn:Disconnect() end
+        if speedOn then
+            local hum = getHum()
+            if hum then hum.WalkSpeed = origSpeed end
+        end
+        speedOn, djOn, floatOn = false, false, false
+    end)
+end)
+
+-- =====================================================
+-- MODUL 4B: EXTRA (NOCLIP, FULLBRIGHT, ANTI-AFK)
+-- =====================================================
+safe("EXTRA", function()
+    local noclipOn, fbOn, afkOn = false, false, true
+
+    local noclipBtn = mkBtn(pageMisc, "NOCLIP : OFF", UDim2.fromOffset(0, 136), UDim2.new(1, -6, 0, 30))
+    local fbBtn = mkBtn(pageMisc, "FULLBRIGHT : OFF", UDim2.fromOffset(0, 170), UDim2.new(1, -6, 0, 30))
+    local afkBtn = mkBtn(pageMisc, "ANTI-AFK : ON", UDim2.fromOffset(0, 204), UDim2.new(1, -6, 0, 30))
+    afkBtn.BackgroundColor3 = C_ON
+
+    local note = mkLabel(pageMisc,
+        "Tips: speed jangan kegedean (aman sekitar 32-40). Tombol 2x JUMP cuma cadangan kalau tombol lompat biasa nggak bisa double jump. Auto-load ulang setelah rejoin: " .. reloadStatus .. ".",
+        UDim2.fromOffset(0, 240), UDim2.new(1, -6, 0, 70), 10, GRAY)
+    note.TextWrapped = true
+    note.TextYAlignment = Enum.TextYAlignment.Top
+
+    -- ===== NOCLIP =====
+    local saved = {}
+
+    local function restoreNoclip()
+        for p in pairs(saved) do
+            if p.Parent then p.CanCollide = true end
+            saved[p] = nil
+        end
+    end
+
+    noclipBtn.Activated:Connect(function()
+        noclipOn = not noclipOn
+        noclipBtn.Text = "NOCLIP : " .. (noclipOn and "ON" or "OFF")
+        noclipBtn.BackgroundColor3 = noclipOn and C_ON or C_BTN
+        if not noclipOn then restoreNoclip() end
+    end)
+
+    track(RunService.Stepped:Connect(function()
+        if not noclipOn then return end
+        local c = player.Character
+        if not c then return end
+        for _, p in ipairs(c:GetDescendants()) do
+            if p:IsA("BasePart") and p.CanCollide then
+                saved[p] = true
+                p.CanCollide = false
+            end
+        end
+    end))
+
+    -- ===== FULLBRIGHT =====
+    local fbSaved = nil
+
+    local function applyFB()
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.FogStart = 100000
+        Lighting.FogEnd = 1000000
+        Lighting.GlobalShadows = false
+        Lighting.Ambient = Color3.fromRGB(190, 190, 190)
+        Lighting.OutdoorAmbient = Color3.fromRGB(190, 190, 190)
+        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atm then atm.Density = 0 end
+    end
+
+    local function restoreFB()
+        if not fbSaved then return end
+        Lighting.Brightness = fbSaved.Brightness
+        Lighting.ClockTime = fbSaved.ClockTime
+        Lighting.FogStart = fbSaved.FogStart
+        Lighting.FogEnd = fbSaved.FogEnd
+        Lighting.GlobalShadows = fbSaved.GlobalShadows
+        Lighting.Ambient = fbSaved.Ambient
+        Lighting.OutdoorAmbient = fbSaved.OutdoorAmbient
+        local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+        if atm and fbSaved.Density then atm.Density = fbSaved.Density end
+        fbSaved = nil
+    end
+
+    fbBtn.Activated:Connect(function()
+        fbOn = not fbOn
+        fbBtn.Text = "FULLBRIGHT : " .. (fbOn and "ON" or "OFF")
+        fbBtn.BackgroundColor3 = fbOn and C_ON or C_BTN
+        if fbOn then
+            local atm = Lighting:FindFirstChildOfClass("Atmosphere")
+            fbSaved = {
+                Brightness = Lighting.Brightness,
+                ClockTime = Lighting.ClockTime,
+                FogStart = Lighting.FogStart,
+                FogEnd = Lighting.FogEnd,
+                GlobalShadows = Lighting.GlobalShadows,
+                Ambient = Lighting.Ambient,
+                OutdoorAmbient = Lighting.OutdoorAmbient,
+                Density = atm and atm.Density or nil,
+            }
+        else
+            restoreFB()
+        end
+    end)
+
+    track(RunService.Heartbeat:Connect(function()
+        if fbOn then pcall(applyFB) end
+    end))
+
+    -- ===== ANTI-AFK =====
+    afkBtn.Activated:Connect(function()
+        afkOn = not afkOn
+        afkBtn.Text = "ANTI-AFK : " .. (afkOn and "ON" or "OFF")
+        afkBtn.BackgroundColor3 = afkOn and C_ON or C_BTN
+    end)
+
+    track(player.Idled:Connect(function()
+        if not afkOn then return end
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:CaptureController()
+            vu:ClickButton2(Vector2.new(0, 0))
+        end)
+    end))
+
+    table.insert(cleanups, function()
+        noclipOn = false
+        restoreNoclip()
+        if fbOn then
+            fbOn = false
+            restoreFB()
+        end
+    end)
+end)
+
+-- =====================================================
+-- MODUL 5: AUTO (AMBIL KUNCI + BUKA PINTU + KABUR) + PENGAMAN OPAH
+-- =====================================================
+safe("AUTO", function()
+    local autoOn, session = false, 0
+    local guardOn = true
+    local STEP_DELAY = 0.5
+    local KEY_RADIUS, DOOR_RADIUS = 12, 15
+    local SAFE_DIST, PANIC_DIST, GUARD_TIMEOUT = 35, 20, 30
+    local safePos = nil
+
+    -- UI
+    local autoBtn = mkBtn(pageAuto, "AUTO KUNCI + KABUR : OFF", UDim2.fromOffset(0, 0), UDim2.new(1, -6, 0, 30))
+    local status = mkLabel(pageAuto, "Status: siap", UDim2.fromOffset(0, 34), UDim2.new(1, -6, 0, 30), 11, GOLD)
+    status.TextWrapped = true
+    status.TextYAlignment = Enum.TextYAlignment.Top
+    local keysBtn = mkBtn(pageAuto, "AMBIL SEMUA KUNCI SAJA", UDim2.fromOffset(0, 68), UDim2.new(1, -6, 0, 30))
+    local exitBtn = mkBtn(pageAuto, "TELEPORT + BUKA PINTU KELUAR", UDim2.fromOffset(0, 102), UDim2.new(1, -6, 0, 30))
+    local guardBtn = mkBtn(pageAuto, "PENGAMAN OPAH : ON", UDim2.fromOffset(0, 136), UDim2.new(1, -6, 0, 30))
+    guardBtn.BackgroundColor3 = C_ON
+    local infoBtn = mkBtn(pageAuto, "COPY INFO SEKITAR (DEBUG)", UDim2.fromOffset(0, 170), UDim2.new(1, -6, 0, 30))
+    local note = mkLabel(pageAuto,
+        "Pengaman Opah: auto berhenti kalau Opah dekat (<35 studs) dan kabur ke titik awal kalau <20 studs. Kalau pintu butuh passcode, isi manual pakai PASSCODE di atas.",
+        UDim2.fromOffset(0, 204), UDim2.new(1, -6, 0, 60), 10, GRAY)
+    note.TextWrapped = true
+    note.TextYAlignment = Enum.TextYAlignment.Top
+
+    local function setStatus(t) status.Text = "Status: " .. t end
+
+    local function getHum()
+        local c = player.Character
+        return c and c:FindFirstChildOfClass("Humanoid")
+    end
+
+    local function tp(pos, up)
+        local hrp = getHrp()
+        if not hrp then return false end
+        hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+        hrp.CFrame = CFrame.new(pos + Vector3.new(0, up or 3, 0))
+        return true
+    end
+
+    -- ===== pengaman Opah =====
+    local function guard(my)
+        if not guardOn then return end
+        local t0 = os.clock()
+        while session == my and gui.Parent do
+            local _, _, d = findOpah()
+            if d >= SAFE_DIST then return end
+            if os.clock() - t0 > GUARD_TIMEOUT then
+                setStatus("Opah masih dekat, lanjut aja")
+                return
+            end
+            if d < PANIC_DIST and safePos then
+                setStatus("Opah dekat (" .. math.floor(d) .. "m), kabur ke titik aman")
+                tp(safePos, 3)
+            else
+                setStatus("tunggu, Opah dekat (" .. math.floor(d) .. "m)")
+            end
+            task.wait(0.5)
+        end
+    end
+
+    local function markSafe()
+        local hrp = getHrp()
+        safePos = hrp and hrp.Position or safePos
+    end
+
+    -- ===== aksi ambil / buka =====
+    local function firePrompt(pp)
+        pcall(function() pp.HoldDuration = 0 end)
+        pcall(function() pp.RequiresLineOfSight = false end)
+        pcall(function() pp.MaxActivationDistance = math.max(pp.MaxActivationDistance, 30) end)
+        if fireproximityprompt then
+            pcall(fireproximityprompt, pp)
+        else
+            pcall(function()
+                pp:InputHoldBegin()
+                task.wait(0.1)
+                pp:InputHoldEnd()
+            end)
+        end
+    end
+
+    local function fireNearby(radius)
+        local r = nearby(radius)
+        local n = 0
+        for _, e in ipairs(r.prompts) do
+            if e.inst.Enabled then
+                firePrompt(e.inst)
+                n = n + 1
+            end
+        end
+        if fireclickdetector then
+            for _, e in ipairs(r.clicks) do
+                pcall(fireclickdetector, e.inst)
+                n = n + 1
+            end
+        end
+        return n
+    end
+
+    local function keyToolCount()
+        local n = 0
+        local bp = player:FindFirstChildOfClass("Backpack")
+        local c = player.Character
+        if bp then
+            for _, t in ipairs(bp:GetChildren()) do
+                if t:IsA("Tool") and isKeyName(t.Name:lower()) then n = n + 1 end
+            end
+        end
+        if c then
+            for _, t in ipairs(c:GetChildren()) do
+                if t:IsA("Tool") and isKeyName(t.Name:lower()) then n = n + 1 end
+            end
+        end
+        return n
+    end
+
+    local function useKeyTools()
+        local bp = player:FindFirstChildOfClass("Backpack")
+        local hum = getHum()
+        if not bp or not hum then return end
+        for _, t in ipairs(bp:GetChildren()) do
+            if t:IsA("Tool") and isKeyName(t.Name:lower()) then
+                pcall(function() hum:EquipTool(t) end)
+                task.wait(0.15)
+                pcall(function() t:Activate() end)
+                task.wait(0.15)
+            end
+        end
+    end
+
+    local function trigger(obj, part, radius)
+        local hrp = getHrp()
+
+        local pp = obj:IsA("ProximityPrompt") and obj or obj:FindFirstChildWhichIsA("ProximityPrompt", true)
+        if pp then firePrompt(pp) end
+
+        local cd = obj:FindFirstChildWhichIsA("ClickDetector", true)
+        if cd and fireclickdetector then pcall(fireclickdetector, cd) end
+
+        if firetouchinterest and hrp and part then
+            pcall(function()
+                firetouchinterest(hrp, part, 0)
+                task.wait(0.05)
+                firetouchinterest(hrp, part, 1)
+            end)
+        end
+
+        fireNearby(radius)
+    end
+
+    -- kunci dianggap terambil kalau hilang dari map, ada di tas / tangan, atau jumlah kunci di tas nambah
+    local function collected(k, before)
+        if not k.obj:IsDescendantOf(Workspace) then return true end
+        if mine(k.obj) then return true end
+        return keyToolCount() > before
+    end
+
+    local function collectKeys(my)
+        waitIndex()
+        local got, total = 0, 0
+        local seen, tries = {}, {}
+        for round = 1, 3 do
+            local list = {}
+            for _, k in ipairs(topKeys()) do
+                if (tries[k.obj] or 0) < 2 then table.insert(list, k) end
+            end
+            if #list == 0 then break end
+
+            for i, k in ipairs(list) do
+                if session ~= my or not gui.Parent then return got, total end
+                guard(my)
+                if session ~= my then return got, total end
+
+                if not seen[k.obj] then
+                    seen[k.obj] = true
+                    total = total + 1
+                end
+                tries[k.obj] = (tries[k.obj] or 0) + 1
+
+                setStatus("ambil kunci " .. i .. "/" .. #list .. " (putaran " .. round .. ")")
+                local before = keyToolCount()
+                tp(k.part.Position, 3)
+                task.wait(0.25)
+                trigger(k.obj, k.part, KEY_RADIUS)
+                task.wait(STEP_DELAY)
+
+                if not collected(k, before) then
+                    -- injak langsung kuncinya (buat yang diambil lewat sentuhan)
+                    tp(k.part.Position, 0.5)
+                    task.wait(0.2)
+                    trigger(k.obj, k.part, KEY_RADIUS)
+                    task.wait(0.4)
+                end
+
+                if collected(k, before) then got = got + 1 end
+            end
+            task.wait(0.4)
+        end
+        return got, total
+    end
+
+    local function doExit(my)
+        if session ~= my then return false end
+        waitIndex()
+        setStatus("cari pintu keluar...")
+        local obj, part = findExit()
+        if not obj or not part then
+            setStatus("pintu keluar tidak ketemu. Pakai COPY INFO SEKITAR di dekat pintu")
+            return false
+        end
+        useKeyTools()
+        for try = 1, 3 do
+            if session ~= my then return false end
+            guard(my)
+            if session ~= my then return false end
+            setStatus("buka pintu keluar (percobaan " .. try .. "/3)")
+            tp(part.Position, 3)
+            task.wait(0.3)
+            trigger(obj, part, DOOR_RADIUS)
+            task.wait(0.6)
+            useKeyTools()
+        end
+        setStatus("sudah coba buka pintu keluar, cek hasilnya")
+        return true
+    end
+
+    local function resetAutoBtn()
+        autoOn = false
+        autoBtn.Text = "AUTO KUNCI + KABUR : OFF"
+        autoBtn.BackgroundColor3 = C_BTN
+    end
+
+    guardBtn.Activated:Connect(function()
+        guardOn = not guardOn
+        guardBtn.Text = "PENGAMAN OPAH : " .. (guardOn and "ON" or "OFF")
+        guardBtn.BackgroundColor3 = guardOn and C_ON or C_BTN
+    end)
+
+    autoBtn.Activated:Connect(function()
+        session = session + 1
+        if autoOn then
+            resetAutoBtn()
+            setStatus("dihentikan")
+            return
+        end
+        autoOn = true
+        autoBtn.Text = "AUTO KUNCI + KABUR : ON"
+        autoBtn.BackgroundColor3 = C_ON
+        local my = session
+        markSafe()
+        task.spawn(function()
+            local got, total = collectKeys(my)
+            if session ~= my then return end
+            setStatus("kunci terambil " .. got .. "/" .. total .. ", lanjut ke pintu")
+            task.wait(0.8)
+            doExit(my)
+            if session == my then resetAutoBtn() end
+        end)
+    end)
+
+    keysBtn.Activated:Connect(function()
+        session = session + 1
+        resetAutoBtn()
+        local my = session
+        markSafe()
+        task.spawn(function()
+            local got, total = collectKeys(my)
+            if session == my then
+                setStatus("selesai: " .. got .. "/" .. total .. " kunci terambil")
+            end
+        end)
+    end)
+
+    exitBtn.Activated:Connect(function()
+        session = session + 1
+        resetAutoBtn()
+        local my = session
+        markSafe()
+        task.spawn(function() doExit(my) end)
+    end)
+
+    -- Debug: salin daftar prompt / klik / kunci di sekitar ke clipboard
+    local function count(t)
+        local n = 0
+        for _ in pairs(t) do n = n + 1 end
+        return n
+    end
+
+    infoBtn.Activated:Connect(function()
+        local lines = {}
+        local hrp = getHrp()
+        if hrp then
+            table.insert(lines, "POS: " .. math.floor(hrp.Position.X) .. ", " .. math.floor(hrp.Position.Y) .. ", " .. math.floor(hrp.Position.Z))
+        end
+        table.insert(lines, "INDEX | ready=" .. tostring(Index.ready) .. " keys=" .. count(Index.keys)
+            .. " opah=" .. count(Index.opah) .. " prompts=" .. count(Index.prompts)
+            .. " clicks=" .. count(Index.clicks) .. " exits=" .. count(Index.exits))
+        local r = nearby(40)
+        for _, e in ipairs(r.prompts) do
+            table.insert(lines, "PROMPT | " .. e.inst.ActionText .. " | " .. e.inst.ObjectText
+                .. " | enabled=" .. tostring(e.inst.Enabled) .. " | " .. e.inst:GetFullName() .. " | " .. math.floor(e.dist) .. "m")
+        end
+        for _, e in ipairs(r.clicks) do
+            table.insert(lines, "CLICK | " .. e.inst:GetFullName() .. " | " .. math.floor(e.dist) .. "m")
+        end
+        for _, k in ipairs(topKeys()) do
+            table.insert(lines, "KEY | " .. k.obj.ClassName .. " | " .. k.obj:GetFullName())
+        end
+        local bp = player:FindFirstChildOfClass("Backpack")
+        if bp then
+            for _, t in ipairs(bp:GetChildren()) do
+                table.insert(lines, "TAS | " .. t.ClassName .. " | " .. t.Name)
+            end
+        end
+        local exitObj = findExit()
+        table.insert(lines, "EXIT | " .. (exitObj and exitObj:GetFullName() or "tidak ketemu"))
+        table.insert(lines, "EXEC | prompt=" .. tostring(fireproximityprompt ~= nil)
+            .. " click=" .. tostring(fireclickdetector ~= nil)
+            .. " touch=" .. tostring(firetouchinterest ~= nil))
+
+        local text = table.concat(lines, "\n")
+        print("AZZURA INFO:\n" .. text)
+        local ok = pcall(function()
+            if setclipboard then
+                setclipboard(text)
+            elseif toclipboard then
+                toclipboard(text)
+            else
+                error("no clipboard")
+            end
+        end)
+        setStatus(ok and ("info disalin (" .. #lines .. " baris), paste ke chat") or "gagal copy, lihat console (F9)")
+    end)
+
+    table.insert(cleanups, function()
+        session = session + 1
+        autoOn = false
+    end)
+end)
+
+-- =====================================================
+-- TOMBOL X + KONFIRMASI CLOSE
+-- =====================================================
+local function doClose()
+    for _, f in ipairs(allFeatures) do
+        pcall(f.set, false)
+    end
+    for _, fn in ipairs(cleanups) do
+        pcall(fn)
+    end
+    for _, c in ipairs(conns) do
+        pcall(function() c:Disconnect() end)
+    end
+    gui:Destroy()
+end
+
+close.Activated:Connect(function()
+    setMinimized(false)
+    confirm.Visible = true
+end)
+noBtn.Activated:Connect(function()
+    confirm.Visible = false
+end)
+yesBtn.Activated:Connect(doClose)
+
+print("AZZURA HUB by Azhari v5 loaded")
